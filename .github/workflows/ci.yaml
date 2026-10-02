@@ -1,0 +1,36 @@
+name: FlashShield CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies & lint
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r app/requirements.txt
+        python -m py_compile app/main.py
+
+    - name: Run Trivy Vulnerability Scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        severity: 'CRITICAL,HIGH'
+
+    - name: Build Docker Image
+      run: |
+        docker build -t flashshield-api:latest ./app
