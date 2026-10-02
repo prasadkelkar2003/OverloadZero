@@ -1,0 +1,59 @@
+pipeline {
+    agent any
+
+    environment {
+        APP_NAME     = "flashshield-api"
+        DOCKER_HUB   = "yourdockerhubusername"
+        IMAGE_TAG    = "${env.BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Code Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Static Code & Dockerfile Linting') {
+            steps {
+                sh 'echo "Running Python syntax validation..."'
+                sh 'python3 -m py_compile app/main.py'
+            }
+        }
+
+        stage('Security Vulnerability Scan (Trivy)') {
+            steps {
+                sh 'echo "Scanning workspace and dependencies with Trivy..."'
+                sh 'docker run --rm -v $(pwd):/workspace aquasec/trivy:latest fs --severity HIGH,CRITICAL /workspace'
+            }
+        }
+
+        stage('Build & Push Docker Image') {
+            steps {
+                sh """
+                docker build -t ${DOCKER_HUB}/${APP_NAME}:${IMAGE_TAG} -t ${DOCKER_HUB}/${APP_NAME}:latest ./app
+                # docker push ${DOCKER_HUB}/${APP_NAME}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Deploy to Kubernetes Cluster') {
+            steps {
+                sh """
+                kubectl apply -f k8s/00-namespace.yaml
+                kubectl apply -f k8s/01-redis.yaml
+                kubectl apply -f k8s/02-postgres-pgbouncer.yaml
+                kubectl apply -f k8s/03-api-deployment.yaml
+                kubectl apply -f k8s/04-hpa.yaml
+                kubectl apply -f k8s/05-ingress.yaml
+                """
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}
