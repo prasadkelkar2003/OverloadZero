@@ -1,0 +1,101 @@
+================================================================================
+  OVERLOADZERO / FLASHSHIELD: END-TO-END DEPLOYMENT & SRE REPRODUCTION GUIDE
+================================================================================
+Target Platform: KillerCoda (Ubuntu + Kubernetes Cluster) / Linux Host
+Prerequisites: Docker Hub Account + Access Token, GitHub Repo, Jenkins
+
+--------------------------------------------------------------------------------
+PART 1: HOST PREPARATION & PERMISSIONS (KillerCoda Terminal)
+--------------------------------------------------------------------------------
+Run these commands on the controlplane node before starting the pipeline:
+
+1. Grant Jenkins access to the Docker daemon:
+   sudo usermod -aG docker jenkins 2>/dev/null || true
+   sudo chmod 666 /var/run/docker.sock
+
+2. Grant Jenkins access to Kubernetes cluster via kubeconfig:
+   sudo mkdir -p /var/lib/jenkins/.kube
+   sudo cp -i /etc/kubernetes/admin.conf /var/lib/jenkins/.kube/config
+   sudo chown -R jenkins:jenkins /var/lib/jenkins/.kube 2>/dev/null || true
+
+3. Deploy and configure the Kubernetes Metrics-Server (required for HPA):
+   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+   kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+
+--------------------------------------------------------------------------------
+PART 2: CI/CD PIPELINE CONFIGURATION & RUN (Jenkins UI)
+--------------------------------------------------------------------------------
+1. Open Jenkins UI (usually on port 8080).
+2. Click "New Item" -> Enter Name (e.g., "overloadzero-pipeline") -> Select "Pipeline" -> Click "OK".
+3. Under Pipeline configuration:
+   - Definition: Pipeline script from SCM
+   - SCM: Git
+   - Repository URL: https://github.com/prasadkelkar2003/OverloadZero
+   - Branch Specifier: */main
+   - Script Path: jenkins/Jenkinsfile
+4. Click "Save".
+5. Click "Build Now" once to register the parameters (this initial run reads the script).
+6. Refresh the page (F5). The button changes to "Build with Parameters".
+7. Click "Build with Parameters":
+   - DOCKER_USER: <your-docker-hub-username>
+   - DOCKER_PASS: <your-docker-hub-access-token>
+8. Click "Build" and verify that all stages succeed:
+   Checkout -> Lint -> Docker Build & Push -> Kubernetes Deployment.
+
+--------------------------------------------------------------------------------
+PART 3: VERIFICATION & CACHE PRE-WARMING (Terminal)
+--------------------------------------------------------------------------------
+1. Verify all pods, services, and the HPA are running:
+   kubectl get pods,svc,hpa -n flashshield
+
+2. Pre-warm Redis cache with 5,000 student results:
+   API_POD=$(kubectl get pod -n flashshield -l app=flashshield-api -o jsonpath="{.items[0].metadata.name}")
+   kubectl exec -i $API_POD -n flashshield -- python3 -c "
+   import redis
+   r = redis.Redis(host='redis-service', port=6379, decode_responses=True)
+   pipe = r.pipeline()
+   for i in range(1001, 6001):
+       pipe.set(f'student:21BCE{i}', f'GPA: {round(7.0 + (i % 30)/10.0, 2)} | Status: PASSED (Pre-cached)')
+   pipe.execute()
+   print('Pre-warmed 5,000 student records into Redis successfully!')
+   "
+
+--------------------------------------------------------------------------------
+PART 4: EXPOSE SERVICES VIA NODEPORT
+--------------------------------------------------------------------------------
+1. Patch the ClusterIP service to NodePort (Port 30080):
+   kubectl patch svc flashshield-api-svc -n flashshield -p '{"spec": {"type": "NodePort", "ports": [{"port": 8000, "nodePort": 30080, "targetPort": 8000}]}}'
+
+2. In KillerCoda UI, open Traffic / Ports -> Access Port 30080:
+   - Page 1 (Student Portal): http://<host-ip>:30080/
+   - Page 2 (SRE Ops Dashboard): http://<host-ip>:30080/ops
+
+--------------------------------------------------------------------------------
+PART 5: SRE LIVE DEMO & HORIZONTAL POD AUTOSCALING (HPA)
+--------------------------------------------------------------------------------
+1. In Terminal 1, keep a real-time monitor running:
+   watch -n 1 "kubectl get hpa,pods -n flashshield"
+
+2. In Terminal 2, launch concurrent distributed stress pods:
+   for i in 1 2 3 4; do
+     kubectl run load-gen-$i -n flashshield --image=busybox:1.28 --restart=Never -- /bin/sh -c '
+       while true; do 
+         RAND=$((RANDOM % 100000 + 7000))
+         wget -q -O- "http://flashshield-api-svc:8000/api/result?roll_no=BURST$RAND" > /dev/null
+       done'
+   done
+
+3. On the Browser (SRE Ops Dashboard - /ops):
+   - Click "1,000 Req Shock" button repeatedly.
+   - Observe Total Requests climbing past thousands.
+   - Point out how the pod names alternate in "Current Node", proving Kubernetes round-robin load balancing.
+
+4. Observe Autoscaling in Terminal 1:
+   - CPU metric climbs above the target threshold.
+   - Replicas automatically scale up from 2 -> 4 -> 6 -> 8 -> 10.
+   - New pods transition from ContainerCreating to Running without downtime.
+
+5. Clean up load generators after the demo:
+   kubectl delete pod load-gen-1 load-gen-2 load-gen-3 load-gen-4 -n flashshield
+   (Pods will automatically scale back down to minReplicas=2 after stabilization window).
+================================================================================
