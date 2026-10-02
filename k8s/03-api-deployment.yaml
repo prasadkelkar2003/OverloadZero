@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flashshield-api
+  namespace: flashshield
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: flashshield-api
+  template:
+    metadata:
+      labels:
+        app: flashshield-api
+    spec:
+      containers:
+      - name: api
+        image: flashshield-api:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+        env:
+        - name: REDIS_HOST
+          value: "redis-service"
+        - name: REDIS_PORT
+          value: "6379"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "300m"
+            memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flashshield-api-svc
+  namespace: flashshield
+spec:
+  type: ClusterIP
+  selector:
+    app: flashshield-api
+  ports:
+  - port: 8000
+    targetPort: 8000
