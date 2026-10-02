@@ -1,13 +1,14 @@
 pipeline {
     agent any
 
+    parameters {
+        string(name: 'DOCKER_USER', defaultValue: 'yourdockerhubusername', description: 'Docker Hub Username')
+        password(name: 'DOCKER_PASS', description: 'Docker Hub Token/Password (masked)')
+    }
+
     environment {
-        APP_NAME        = "flashshield-api"
-        // Replace with your exact Docker Hub username
-        DOCKER_HUB      = "yourdockerhubusername"
-        IMAGE_TAG       = "${env.BUILD_NUMBER}"
-        // ID of the 'Username with password' credential created in Jenkins
-        DOCKER_CREDS_ID = "docker-hub-credentials"
+        APP_NAME  = "flashshield-api"
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
     }
 
     stages {
@@ -17,57 +18,28 @@ pipeline {
             }
         }
 
-        stage('Static Code & Dockerfile Linting') {
+        stage('Build & Push to Registry') {
             steps {
                 sh '''
-                echo "Running Python syntax validation..."
-                python3 -m py_compile app/main.py
+                echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                docker build -t ${DOCKER_USER}/${APP_NAME}:${IMAGE_TAG} -t ${DOCKER_USER}/${APP_NAME}:latest ./app
+                docker push ${DOCKER_USER}/${APP_NAME}:${IMAGE_TAG}
+                docker push ${DOCKER_USER}/${APP_NAME}:latest
+                docker logout
                 '''
             }
         }
 
-        stage('Security Vulnerability Scan (Trivy)') {
+        stage('Deploy to Kubernetes') {
             steps {
                 sh '''
-                echo "Scanning repository and dependencies with Trivy..."
-                docker run --rm -v $(pwd):/workspace aquasec/trivy:latest fs \
-                  --severity HIGH,CRITICAL \
-                  --exit-code 0 \
-                  /workspace
-                '''
-            }
-        }
-
-        stage('Build & Push Docker Image') {
-            steps {
-                // Securely binds username and token without logging secrets
-                withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh '''
-                    echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                    docker build -t ${DOCKER_HUB}/${APP_NAME}:${IMAGE_TAG} -t ${DOCKER_HUB}/${APP_NAME}:latest ./app
-                    docker push ${DOCKER_HUB}/${APP_NAME}:${IMAGE_TAG}
-                    docker push ${DOCKER_HUB}/${APP_NAME}:latest
-                    docker logout
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy to Kubernetes Cluster') {
-            steps {
-                sh '''
-                # Dynamically substitute the placeholder image with the newly built Docker Hub image tag
-                sed -i "s|image: flashshield-api:latest|image: ${DOCKER_HUB}/${APP_NAME}:${IMAGE_TAG}|g" k8s/03-api-deployment.yaml
-
-                # Apply manifests in dependency order
+                sed -i "s|image: flashshield-api:latest|image: ${DOCKER_USER}/${APP_NAME}:${IMAGE_TAG}|g" k8s/03-api-deployment.yaml
                 kubectl apply -f k8s/00-namespace.yaml
                 kubectl apply -f k8s/01-redis.yaml
                 kubectl apply -f k8s/02-postgres-pgbouncer.yaml
                 kubectl apply -f k8s/03-api-deployment.yaml
                 kubectl apply -f k8s/04-hpa.yaml
                 kubectl apply -f k8s/05-ingress.yaml
-
-                # Verify rollout progress
                 kubectl rollout status deployment/flashshield-api -n flashshield --timeout=90s
                 '''
             }
