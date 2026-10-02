@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SRE Control Plane & Resilience Engine</title>
+  <style>
+    body { font-family: "JetBrains Mono", Consolas, monospace; background: #090d16; color: #22c55e; padding: 30px; margin: 0; }
+    h1 { color: #f8fafc; font-size: 24px; margin-bottom: 20px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .panel { background: #131b2e; border: 1px solid #1e293b; border-radius: 8px; padding: 20px; }
+    button { background: #059669; color: white; border: none; padding: 12px 18px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-right: 8px; }
+    button:hover { opacity: 0.9; }
+    button.warn { background: #d97706; }
+    button.danger { background: #dc2626; }
+    .stat-val { font-size: 32px; font-weight: bold; color: #f8fafc; margin: 8px 0; }
+    .badge { display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 13px; font-weight: bold; }
+    .badge-ok { background: #065f46; color: #34d399; }
+    .badge-tripped { background: #7f1d1d; color: #fca5a5; }
+    #log { margin-top: 15px; color: #64748b; font-size: 13px; min-height: 40px; }
+  </style>
+</head>
+<body>
+  <h1>FlashShield SRE Simulation & Resiliency Dashboard</h1>
+  <div class="grid">
+    <div class="panel">
+      <h3 style="color:#f8fafc; margin-top:0;">Traffic Shock Injector</h3>
+      <p style="color:#94a3b8; font-size:13px;">Simulate sudden student demand spikes to observe HPA autoscaling and circuit protection:</p>
+      <div style="margin: 20px 0;">
+        <button onclick="sendBurst(25, 'Normal')">25 Req Burst</button>
+        <button class="warn" onclick="sendBurst(200, 'Flash Crowd')">200 Req Burst</button>
+        <button class="danger" onclick="sendBurst(1000, 'Overload Spike')">1,000 Req Shock</button>
+      </div>
+      <div id="log">Status: Idle</div>
+    </div>
+
+    <div class="panel">
+      <h3 style="color:#f8fafc; margin-top:0;">Cluster Telemetry & Circuit Status</h3>
+      <div style="margin-bottom: 15px;">
+        Circuit State: <span id="cb-badge" class="badge badge-ok">NORMAL (CLOSED)</span>
+      </div>
+      <div class="stat-val" id="total-reqs">0</div>
+      <div style="color: #64748b; font-size: 13px;">Total Requests Handled on Local Node</div>
+      <hr style="border: 0; border-top: 1px solid #1e293b; margin: 15px 0;">
+      <div>Current Node: <span style="color:#38bdf8;">{{ pod }}</span></div>
+      <div>Cache Hit Ratio: <span id="hit-ratio" style="color:#38bdf8;">0%</span></div>
+    </div>
+  </div>
+
+  <script>
+    async function updateStats() {
+      try {
+        const res = await fetch('/api/ops/stats');
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        document.getElementById('total-reqs').innerText = data.total_requests;
+        const total = data.cache_hits + data.cache_misses;
+        const ratio = total > 0 ? ((data.cache_hits / total) * 100).toFixed(1) : 100;
+        document.getElementById('hit-ratio').innerText = ratio + '%';
+        document.getElementById('cb-badge').className = 'badge badge-ok';
+        document.getElementById('cb-badge').innerText = 'NORMAL (CLOSED)';
+      } catch (e) {
+        document.getElementById('cb-badge').className = 'badge badge-tripped';
+        document.getElementById('cb-badge').innerText = 'CIRCUIT BREAKER OPEN / THROTTLED';
+      }
+    }
+    setInterval(updateStats, 1200);
+
+    function sendBurst(count, label) {
+      document.getElementById('log').innerText = `Injecting ${label} (${count} concurrent requests)...`;
+      let dispatched = 0;
+      for (let i = 0; i < count; i++) {
+        const roll = '21BCE' + Math.floor(1000 + Math.random() * 50);
+        fetch(`/api/result?roll_no=${roll}`)
+          .then(r => { if(r.status === 429) throw new Error(); })
+          .catch(() => {
+            document.getElementById('cb-badge').className = 'badge badge-tripped';
+            document.getElementById('cb-badge').innerText = '429 TOO MANY REQUESTS (PROTECTION ACTIVE)';
+          });
+      }
+      setTimeout(() => {
+        document.getElementById('log').innerText = `Finished injecting ${count} requests. Check HPA pod scaling.`;
+      }, 1500);
+    }
+  </script>
+</body>
+</html>
