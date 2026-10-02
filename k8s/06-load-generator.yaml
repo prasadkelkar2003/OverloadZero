@@ -1,0 +1,14 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flashshield-k6-loadtest
+  namespace: flashshield
+spec:
+  template:
+    spec:
+      containers:
+      - name: k6
+        image: grafana/k6:latest
+        command: ["k6", "run", "--vus", "50", "--duration", "30s", "http://flashshield-api-svc:8000/api/result?roll_no=21BCE1001"]
+      restartPolicy: Never
+  backoffLimit: 1
