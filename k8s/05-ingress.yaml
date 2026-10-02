@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: flashshield-ingress
+  namespace: flashshield
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    # Rate limit: 30 requests/sec per client IP with burst margin
+    nginx.ingress.kubernetes.io/limit-rps: "30"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
+    nginx.ingress.kubernetes.io/custom-http-errors: "429,502,503"
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: flashshield-api-svc
+            port:
+              number: 8000
